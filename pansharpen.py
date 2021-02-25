@@ -23,15 +23,15 @@ class LANDSAT8_PRE(object):
 
         self.multi_prof = multi_prof
         mul_shape = bands[-1].shape
-        self.mul_bands = np.zeros((len(bands), mul_shape[0], mul_shape[1]), dtype = bands[-1].dtype)
+        self.multi_bands = np.zeros((len(bands), mul_shape[0], mul_shape[1]), dtype = bands[-1].dtype)
         for i in range(len(bands)):
-            self.mul_bands[i] = bands[i]
+            self.multi_bands[i] = bands[i]
 
         del bands
 
         self.pan_band, self.pan_prof = self._get_band(8)
         self.qa_band, self.qa_prof = self._get_band('QA')
-        self.snow_ice_percent, self.cloud_mask, self.snow_mask, self.fill_mask = self._calc_cloud_ice_percent(self.qa_band)
+        self.cloud_mask, self.snow_mask, self.fill_mask = self._get_mask()
 
         return
 
@@ -46,31 +46,16 @@ class LANDSAT8_PRE(object):
 
         return band, band_profile
 
-    def _calc_cloud_ice_percent(self, qa):
+    def _get_mask(self):
 
         cloud_high_conf = int('0000000001100000',2)
         snow_high_conf = int('0000011000000000',2)
         fill_pixels = int('0000000000000001', 2)
-        cloud_mask = np.bitwise_and(qa, cloud_high_conf) == cloud_high_conf
-        snow_mask = np.bitwise_and(qa, snow_high_conf) == snow_high_conf
-        fill_mask = np.bitwise_and(qa, fill_pixels) == fill_pixels
+        cloud_mask = np.bitwise_and(self.qa_band, cloud_high_conf) == cloud_high_conf
+        snow_mask = np.bitwise_and(self.qa_band, snow_high_conf) == snow_high_conf
+        fill_mask = np.bitwise_and(self.qa_band, fill_pixels) == fill_pixels
 
-        return np.true_divide(np.sum(cloud_mask | snow_mask),qa.size - np.sum(fill_mask)) * 100.0, cloud_mask, snow_mask, fill_mask
-
-    @staticmethod
-    def _get_threshold(band):
-
-        return np.percentile(tmp[np.logical_and(tmp>0, tmp<65535)], (0,99))
-
-    @staticmethod
-    def _rescale_band(band, mask):
-        tmp = band[np.logical_not(mask)]
-        p_low, p_high = LANDSAT8_PRE._get_threshold(tmp)
-        tmp = np.zeros(band.shape,dtype=np.uint16)
-        tmp[np.logical_not(mask)] = rescale_intensity(band[np.logical_not(mask)],in_range=(p_low,p_high), out_range=(p_low, 63000))
-        tmp[mask] = rescale_intensity(band[mask], in_range=(p_high,65535), out_range=(63000,65535))
-        return tmp
-
+        return cloud_mask, snow_mask, fill_mask
 
 class ASNARO1_L1B_PRE(object):
     def __init__(self, multi, pan):
