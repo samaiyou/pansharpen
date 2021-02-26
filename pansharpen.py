@@ -86,26 +86,6 @@ class Pansharpen(object):
         return
 
     @staticmethod
-    def _grey_world(bands):
-        mu_g = np.average(bands[1])
-        bands[0] = np.minimum(bands[0] * (mu_g / np.average(bands[0])), 255)
-        bands[2] = np.minimum(bands[2] * (mu_g / np.average(bands[2])), 255)
-        return bands
-
-    @staticmethod
-    def _stretch(bands):
-        for i, band in enumerate(bands):
-            bands[i] = np.maximum(band - band.min(), 0)
-        return bands
-
-    @staticmethod
-    def _max_white(bands):
-        brightest = float(2 ** 8)
-        for i, band in enumerate(bands):
-            bands[i] = np.minimum(band * (brightest / float(band.max())), 255)
-        return bands
-
-    @staticmethod
     def _upper_scale(multi_bands, pan_band, multi_prof, pan_prof, sampling_method='bilinear'):
 
         if sampling_method == 'nearest':
@@ -139,7 +119,7 @@ class Pansharpen(object):
     @staticmethod
     def _rescale(band, in_range=(0,65535), out_range=(0,255), dtype=np.uint8):
 
-        return rescale_intensity(band, in_range, out_range).astype(dtype)
+        return rescale_intensity(band, in_range=in_range, out_range=out_range).astype(dtype)
 
 
     @staticmethod
