@@ -6,13 +6,14 @@ from rasterio.warp import reproject, Resampling
 from skimage.exposure import rescale_intensity
 
 class LANDSAT8_PRE(object):
-    def __init__(self, landsat8_id):
+    def __init__(self, landsat8_id, landsat8_base='https://s3-us-west-2.amazonaws.com/landsat-pds/c1/L8/{}/{}/{}/{}'):
 
         pathrow = landsat8_id.split('_')[2]
         self.sceneid = landsat8_id
         self.path = pathrow[:3]
         self.row = pathrow[3:]
         self.rgb = [2,1,0,3]
+        self.landsat8_base = landsat8_base
         bands = []
         multi_prof = None
         for band in range(2,6):
@@ -37,7 +38,7 @@ class LANDSAT8_PRE(object):
 
     def _get_band(self, bandname):
 
-        url_base = 'https://s3-us-west-2.amazonaws.com/landsat-pds/c1/L8/{}/{}/{}/{}'
+        url_base = self.landsat8_base
         filename = '{}_B{}.TIF'.format(self.sceneid, bandname)
         download_url = url_base.format(self.path,self.row,self.sceneid,filename)
         with rio.open(download_url) as src:
@@ -79,7 +80,8 @@ class Pansharpen(object):
         self.pan_band = pan
         self.pan_prof = pan_prof
 
-        self.multi_bands = Pansharpen._upper_scale(self.multi_bands, self.pan_band, self.multi_prof, self.pan_prof)
+        #self.multi_bands = Pansharpen._upper_scale(self.multi_bands, self.pan_band, self.multi_prof, self.pan_prof)
+        self.multi_bands = multi
         self.bweight = bweight
         self.irweight = irweight
 
@@ -168,16 +170,136 @@ class Pansharpen(object):
 
         return dnf
 
+    @staticmethod
+    def rescale_8(band, cut=(0.1,99)):
+        return Pansharpen.rescale_band(band, cut)
+
+    @staticmethod
+    def rescale_16(band, cut=(0.1,99)):
+        return Pansharpen.rescale_band(band, cut, 'uint16')
+
+    @staticmethod
+    def rescale_band(band, cut=(0,100), dtype='uint8'):
+        low, high = np.percentile(band[band>0], cut)
+        return rescale_intensity(band, in_range=(low,high), out_range=(0,np.iinfo(dtype).max)).astype(dtype)
+
+    @staticmethod
+    def bgr2hsv(bgr):
+        """
+        h = 0 ~ 360 degree
+        s = 0.0 ~ 1.0
+        v = maximum( depend on input dtype(uint8 max 255, uint16 max 65535)
+        """
+        r = bgr[2]
+        g = bgr[1]
+        b = bgr[0]
+        width, height = r.shape
+        s = np.zeros(r.shape, dtype=np.float32)
+        h = np.zeros(r.shape, dtype=np.float32)
+        mm = np.maximum(np.maximum(r,g),b)
+        mn = np.minimum(np.minimum(r,g),b)
+        delta = mm - mn
+        s[mm>0] = delta[mm>0]/mm[mm>0]
+        s[mm==0] = 0
+        delta[delta == 0] = 1
+        rt = r/delta
+        gt = g/delta
+        bt = b/delta
+        h = 240 + 60*(rt - gt)
+        h[g == mm] = 120 + 60 * (bt[g == mm] - rt[g == mm])
+        h[r == mm] = 60 * (gt[r == mm] - bt[r == mm])
+        h[mm == mn] = 0
+        h[h<0] += 360.0
+        v = mm.astype(np.float32)
+        return np.stack((h,s,v))
+
+    @staticmethod
+    def hsv2bgr(hsv,dtype='uint16'):
+        """
+        h = 0 ~ 360 degree
+        s = 0.0 ~ 1.0
+        v = maximum( depend on input dtype(uint8 max 255, uint16 max 65535)
+        """
+        h = hsv[0]
+        s = hsv[1]
+        v = hsv[2].astype(dtype)
+        width,height = v.shape
+        v = v.flatten()
+        s = s.flatten()
+        h = h.flatten()
+        i = np.int8(h/60)
+        mn = v * (1-s)
+        mx = v
+        delta = mx - mn
+        r , g , b = np.zeros(v.shape, dtype=dtype),np.zeros(v.shape, dtype=dtype),np.zeros(v.shape, dtype=dtype)
+        r[i==0] = mx[i==0]
+        g[i==0] = (h[i==0]/60)*delta[i==0]+mn[i==0]
+        b[i==0] = mn[i==0]
+
+        r[i==1] = ((120-h[i==1])/60)*delta[i==1]+mn[i==1]
+        g[i==1] = mx[i==1]
+        b[i==1] = mn[i==1]
+
+        r[i==2] = mn[i==2]
+        g[i==2] = mx[i==2]
+        b[i==2] = ((h[i==2]-120)/60)*delta[i==2]+mn[i==2]
+
+        r[i==3] = mn[i==3]
+        g[i==3] = ((240-h[i==3])/60)*delta[i==3]+mn[i==3]
+        b[i==3] = mx[i==3]
+
+        r[i==4] = ((h[i==4]-240)/60)*delta[i==4]+mn[i==4]
+        g[i==4] = mn[i==4]
+        b[i==4] = mx[i==4]
+
+        r[i==5] = mx[i==5]
+        g[i==5] = mn[i==5]
+        b[i==5] = ((360-h[i==5])/60)*delta[i==5]+mn[i==5]
+
+        r[s==0] = mx[s==0]
+        g[s==0] = mx[s==0]
+        b[s==0] = mx[s==0]
+
+        return np.stack((b.reshape(width,height),g.reshape(width,height),r.reshape(width,height)))
+
     def Brovey(self):
 
-        dnf = self.calc_brovey_dnf(self.multi_bands, self.pan_band, self.rgb)
+        multi_bands = Pansharpen._upper_scale(self.multi_bands, self.pan_band, self.multi_prof, self.pan_prof)
+
+        dnf = self.calc_brovey_dnf(multi_bands, self.pan_band, self.rgb)
         panshapend = np.empty(
-                self.multi_bands.shape,
+                multi_bands.shape,
                 dtype = np.float32
                 )
 
-        for i in range(self.multi_bands.shape[0]):
-            panshapend[i] = self.multi_bands[i] * dnf
+        for i in range(multi_bands.shape[0]):
+            panshapend[i] = multi_bands[i] * dnf
 
         return panshapend
 
+    def HSV(self, hsv=False):
+        import cv2
+
+        bgr = np.stack((self.multi_bands[self.rgb[0]],self.multi_bands[self.rgb[1]],self.multi_bands[self.rgb[2]]))
+
+        hsv = Pansharpen.bgr2hsv(bgr)
+        
+        newhsv = Pansharpen._upper_scale(hsv, self.pan_band, self.multi_prof, self.pan_prof)
+        return newhsv
+
+        """
+        rgb = cv2.merge((b,g,r))
+        hsv = cv2.cvtColor(rgb,cv2.COLOR_BGR2HSV)
+        h,s,v = cv2.split(hsv)
+        hs = np.stack((h,s))
+        newhs = Pansharpen._upper_scale(hs, self.pan_band, self.multi_prof, self.pan_prof)
+        h = newhs[0]
+        s = newhs[1]
+        v = Pansharpen.rescale_8(self.pan_band)
+        hsv = cv2.merge((h,s,v))
+        if hsv:
+            return hsv
+        bgr = cv2.cvtColor(hsv,cv2.COLOR_HSV2BGR)
+
+        return bgr
+        """
